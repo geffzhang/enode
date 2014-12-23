@@ -6,17 +6,17 @@ namespace ENode.Domain
     /// </summary>
     public interface IRepository
     {
-        /// <summary>Get a aggregate from event store.
+        /// <summary>Get an aggregate from memory cache, if not exist, get it from event store.
         /// </summary>
+        /// <param name="aggregateRootId"></param>
         /// <typeparam name="T"></typeparam>
-        /// <param name="id"></param>
         /// <returns></returns>
-        T Get<T>(string id) where T : AggregateRoot;
-        /// <summary>Get a aggregate from event store.
+        T Get<T>(object aggregateRootId) where T : class, IAggregateRoot;
+        /// <summary>Get an aggregate from memory cache, if not exist, get it from event store.
         /// </summary>
-        /// <param name="type"></param>
-        /// <param name="id"></param>
+        /// <param name="aggregateRootType"></param>
+        /// <param name="aggregateRootId"></param>
         /// <returns></returns>
-        AggregateRoot Get(Type type, string id);
+        IAggregateRoot Get(Type aggregateRootType, object aggregateRootId);
     }
 }

@@ -1,248 +1,150 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
+using ECommon.Components;
 using ENode.Eventing;
-using ENode.Infrastructure;
-using ENode.Snapshoting;
 
 namespace ENode.Domain
 {
-    /// <summary>Abstract aggregate root base class.
+    /// <summary>Represents an abstract base aggregate root.
     /// </summary>
+    /// <typeparam name="TAggregateRootId"></typeparam>
     [Serializable]
-    public abstract class AggregateRoot
+    public abstract class AggregateRoot<TAggregateRootId> : IAggregateRoot
     {
-        #region Private Variables
+        private static IAggregateRootInternalHandlerProvider _eventHandlerProvider;
+        private int _version;
+        private Queue<IDomainEvent> _uncommittedEvents;
+        protected TAggregateRootId _id;
 
-        private Queue<IEvent> _uncommittedEvents;
-        private static IAggregateRootInternalHandlerProvider _eventHandlerProvider = ObjectContainer.Resolve<IAggregateRootInternalHandlerProvider>();
-
-        #endregion
-
-        #region Constructurs
-
-        /// <summary>Default constructor
+        /// <summary>Represents the unique identifier of the aggregate root.
         /// </summary>
-        protected AggregateRoot()
+        public TAggregateRootId Id
         {
-            _uncommittedEvents = new Queue<IEvent>();
-        }
-        /// <summary>Parameterized constructor with a aggregate uniqueId.
-        /// </summary>
-        /// <param name="uniqueId">the aggregate uniqueId</param>
-        public AggregateRoot(string uniqueId) : this()
-        {
-            UniqueId = uniqueId;
+            get { return _id; }
         }
 
-        #endregion
-
-        #region Public Properties
-
-        /// <summary>Represents the uniqueId of the aggregate.
+        /// <summary>Parameterized constructor.
         /// </summary>
-        public string UniqueId { get; protected set; }
-        /// <summary>Represents the current event stream version of the aggregate.
+        protected AggregateRoot(TAggregateRootId id)
+        {
+            if (id == null)
+            {
+                throw new ArgumentNullException("id");
+            }
+            _id = id;
+            _uncommittedEvents = new Queue<IDomainEvent>();
+        }
+
+        /// <summary>Act the current aggregate as the given type of role.
         /// <remarks>
-        /// This version record the total event stream count of the current aggregate, this version is always continuous.
+        /// Rhe current aggregate must implement the role interface, otherwise this method will throw exception.
         /// </remarks>
         /// </summary>
-        public long Version { get; private set; }
-
-        #endregion
-
-        #region Public Methods
-
-        /// <summary>Support the aggregate to act as a specified role, and the role must be an interface.
-        /// <remarks>
-        /// Note: the aggregate must implement the role interace, otherwise exception will be raised.
-        /// </remarks>
-        /// </summary>
-        /// <typeparam name="TRole">The role interface.</typeparam>
-        /// <returns>Returns the current aggregate instance which its type is converted to the role interface.</returns>
+        /// <typeparam name="TRole">The role interface type.</typeparam>
+        /// <returns>Returns the role instance which is acted by the current aggregate.</returns>
         public TRole ActAs<TRole>() where TRole : class
         {
             if (!typeof(TRole).IsInterface)
             {
-                throw new Exception(string.Format("TRole '{0}' must be an interface.", typeof(TRole).FullName));
+                throw new Exception(string.Format("'{0}' is not an interface type.", typeof(TRole).Name));
             }
 
-            var role = this as TRole;
+            var actor = this as TRole;
 
-            if (role == null)
+            if (actor == null)
             {
-                throw new Exception(string.Format("AggregateRoot '{0}' can not act as role '{1}'.", this.GetType().FullName, typeof(TRole).FullName));
+                throw new Exception(string.Format("'{0}' can not act as role '{1}'.", GetType().FullName, typeof(TRole).Name));
             }
 
-            return role;
+            return actor;
+        }
+        /// <summary>Apply a domain event to the current aggregate root.
+        /// </summary>
+        /// <param name="domainEvent"></param>
+        protected void ApplyEvent(IDomainEvent domainEvent)
+        {
+            HandleEvent(domainEvent);
+            AppendUncommittedEvent(domainEvent);
         }
 
-        #endregion
-
-        #region Protected Methods
-
-        /// <summary>Raise a domain event.
-        /// <remarks>
-        /// The event first will be handled by the current aggregate, and then be queued in the local queue of the aggregate.
-        /// </remarks>
-        /// </summary>
-        /// <param name="evnt">The domain event to be raised.</param>
-        protected void RaiseEvent<T>(T evnt) where T : class, IEvent
+        private void HandleEvent(IDomainEvent domainEvent)
         {
-            HandleEvent<T>(evnt);
-            QueueEvent(evnt);
-        }
-
-        #endregion
-
-        #region Internal Methods
-
-        /// <summary>Get all the uncommitted events of the current aggregate.
-        /// </summary>
-        internal IEnumerable<IEvent> GetUncommittedEvents()
-        {
-            return _uncommittedEvents;
-        }
-        /// <summary>Replay the given event stream.
-        /// </summary>
-        /// <param name="eventStream"></param>
-        internal void ReplayEventStream(EventStream eventStream)
-        {
-            ReplayEventStreams(new EventStream[] { eventStream });
-        }
-        /// <summary>Replay the given event streams.
-        /// </summary>
-        internal void ReplayEventStreams(IEnumerable<EventStream> eventStreams)
-        {
-            if (_uncommittedEvents.Count() > 0)
-            {
-                _uncommittedEvents.Clear();
-            }
-
-            foreach (var eventStream in eventStreams)
-            {
-                if (eventStream.Version == 1)
-                {
-                    UniqueId = eventStream.AggregateRootId;
-                }
-                VerifyEvent(eventStream);
-                ApplyEvent(eventStream);
-            }
-        }
-        /// <summary>Initialize from the given snapshot.
-        /// </summary>
-        internal void InitializeFromSnapshot(Snapshot snapshot)
-        {
-            UniqueId = snapshot.AggregateRootId;
-            Version = snapshot.StreamVersion;
-            _uncommittedEvents = new Queue<IEvent>();
             if (_eventHandlerProvider == null)
             {
                 _eventHandlerProvider = ObjectContainer.Resolve<IAggregateRootInternalHandlerProvider>();
             }
-        }
-        /// <summary>Accept the given stream, update the version by the event stream version and clear all the uncommitted events.
-        /// </summary>
-        /// <param name="eventStream"></param>
-        internal void AcceptEventStream(EventStream eventStream)
-        {
-            Version = eventStream.Version;
-            _uncommittedEvents.Clear();
-        }
-
-        #endregion
-
-        #region Private Methods
-
-        /// <summary>Handle the given event and update the aggregate status.
-        /// </summary>
-        private void HandleEvent<T>(T evnt) where T : class, IEvent
-        {
-            var eventHandler = this as IEventHandler<T>;
-            if (eventHandler != null)
+            var handler = _eventHandlerProvider.GetInternalEventHandler(GetType(), domainEvent.GetType());
+            if (handler == null)
             {
-                eventHandler.Handle(evnt);
+                throw new Exception(string.Format("Could not find event handler for [{0}] of [{1}]", domainEvent.GetType().FullName, GetType().FullName));
             }
-            else
-            {
-                var handler = _eventHandlerProvider.GetInternalEventHandler(this.GetType(), evnt.GetType());
-                if (handler == null)
-                {
-                    throw new Exception(string.Format("Event handler not found on {0} for {1}.", this.GetType().FullName, evnt.GetType().FullName));
-                }
-
-                handler(this, evnt);
-            }
+            handler(this, domainEvent);
         }
-        /// <summary>Verify whether the given event stream can be applied on the current aggregate.
-        /// </summary>
-        private void VerifyEvent(EventStream eventStream)
-        {
-            if (eventStream.AggregateRootId != UniqueId)
-            {
-                var errorMessage = string.Format("Cannot apply event stream to aggregate as the AggregateRootId not matched. EventStream Id:{0}, AggregateRootId:{1}; Current AggregateRootId:{2}",
-                                        eventStream.Id,
-                                        eventStream.AggregateRootId,
-                                        UniqueId);
-                throw new Exception(errorMessage);
-            }
-
-            if (eventStream.Version != Version + 1)
-            {
-                var errorMessage = string.Format("Cannot apply event stream to aggregate as the StreamVersion not matched. EventStream Id:{0}, Version:{1}; Current AggregateRoot Version:{2}",
-                                        eventStream.Id,
-                                        eventStream.Version,
-                                        Version);
-                throw new Exception(errorMessage);
-            }
-        }
-        /// <summary>Apply all the events of the given event stream to the aggregate.
-        /// </summary>
-        /// <param name="eventStream"></param>
-        private void ApplyEvent(EventStream eventStream)
-        {
-            foreach (var evnt in eventStream.Events)
-            {
-                HandleEvent(evnt);
-            }
-            Version = eventStream.Version;
-        }
-        /// <summary>Queue a uncommitted event into the current local queue.
-        /// </summary>
-        private void QueueEvent(IEvent uncommittedEvent)
+        private void AppendUncommittedEvent(IDomainEvent domainEvent)
         {
             if (_uncommittedEvents == null)
             {
-                _uncommittedEvents = new Queue<IEvent>();
+                _uncommittedEvents = new Queue<IDomainEvent>();
             }
-            _uncommittedEvents.Enqueue(uncommittedEvent);
+            _uncommittedEvents.Enqueue(domainEvent);
+        }
+        private void VerifyEvent(DomainEventStream eventStream)
+        {
+            var current = this as IAggregateRoot;
+            if (eventStream.Version > 1 && eventStream.AggregateRootId != current.UniqueId)
+            {
+                throw new Exception(string.Format("Invalid domain event stream, aggregateRootId:{0}, expected aggregateRootId:{1}", eventStream.AggregateRootId, current.UniqueId));
+            }
+            if (eventStream.Version != current.Version + 1)
+            {
+                throw new Exception(string.Format("Invalid domain event stream, version:{0}, expected version:{1}", eventStream.Version, current.Version));
+            }
         }
 
-        #endregion
-    }
-    /// <summary>Abstract aggregate root base class with strong type aggregate root id.
-    /// </summary>
-    [Serializable]
-    public abstract class AggregateRoot<TAggregateRootId> : AggregateRoot
-    {
-        protected AggregateRoot() : base() { }
-        public AggregateRoot(TAggregateRootId id) : base(id.ToString()) { }
-
-        /// <summary>The strong type Id of the aggregate.
-        /// </summary>
-        public TAggregateRootId Id
+        string IAggregateRoot.UniqueId
         {
             get
             {
-                if (UniqueId != null)
+                if (Id != null)
                 {
-                    return TypeUtils.ConvertType<TAggregateRootId>(UniqueId);
+                    return Id.ToString();
                 }
-                return default(TAggregateRootId);
+                return null;
             }
-            set
+        }
+        int IAggregateRoot.Version
+        {
+            get { return _version; }
+        }
+        IEnumerable<IDomainEvent> IAggregateRoot.GetChanges()
+        {
+            if (_uncommittedEvents == null)
             {
-                base.UniqueId = TypeUtils.ConvertType<string>(value);
+                return new IDomainEvent[0];
+            }
+            return _uncommittedEvents.ToArray();
+        }
+        void IAggregateRoot.AcceptChanges(int newVersion)
+        {
+            if (_version + 1 != newVersion)
+            {
+                throw new Exception(string.Format("Cannot accept invalid version: {0}, expect version: {1}", newVersion, _version + 1));
+            }
+            _version = newVersion;
+            _uncommittedEvents.Clear();
+        }
+        void IAggregateRoot.ReplayEvents(IEnumerable<DomainEventStream> eventStreams)
+        {
+            if (eventStreams == null) return;
+
+            foreach (var eventStream in eventStreams)
+            {
+                VerifyEvent(eventStream);
+                foreach (var domainEvent in eventStream.DomainEvents)
+                {
+                    HandleEvent(domainEvent);
+                }
+                _version = eventStream.Version;
             }
         }
     }

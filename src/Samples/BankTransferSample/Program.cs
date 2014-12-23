@@ -1,61 +1,85 @@
 ﻿using System;
 using System.Reflection;
-using System.Threading;
 using BankTransferSample.Commands;
 using BankTransferSample.Domain;
-using ENode;
+using BankTransferSample.EventHandlers;
+using ECommon.Autofac;
+using ECommon.Components;
+using ECommon.Configurations;
+using ECommon.JsonNet;
+using ECommon.Log4Net;
 using ENode.Commanding;
-using ENode.Domain;
-using ENode.Infrastructure;
+using ENode.Configurations;
 
 namespace BankTransferSample
 {
     class Program
     {
+        static ENodeConfiguration _configuration;
+
         static void Main(string[] args)
         {
             InitializeENodeFramework();
 
             var commandService = ObjectContainer.Resolve<ICommandService>();
-            var memoryCache = ObjectContainer.Resolve<IMemoryCache>();
+            var syncHelper = ObjectContainer.Resolve<SyncHelper>();
 
-            var bankAccountId1 = Guid.NewGuid();
-            var bankAccountId2 = Guid.NewGuid();
+            Console.WriteLine(string.Empty);
 
-            //开两个银行账户
-            var openAccountCommand1 = new OpenAccount { AccountId = bankAccountId1, AccountNumber = "00001", Owner = "雪华" };
-            var openAccountCommand2 = new OpenAccount { AccountId = bankAccountId2, AccountNumber = "00002", Owner = "凯锋" };
-            commandService.Execute(openAccountCommand1);
-            commandService.Execute(openAccountCommand2);
+            //创建两个银行账户
+            commandService.Execute(new CreateAccountCommand("00001", "雪华"), CommandReturnType.EventHandled).Wait();
+            commandService.Execute(new CreateAccountCommand("00002", "凯锋"), CommandReturnType.EventHandled).Wait();
+
+            Console.WriteLine(string.Empty);
 
             //每个账户都存入1000元
-            var depositCommand1 = new Deposit { AccountId = bankAccountId1, Amount = 1000 };
-            var depositCommand2 = new Deposit { AccountId = bankAccountId2, Amount = 1000 };
-            commandService.Execute(depositCommand1);
-            commandService.Execute(depositCommand2);
+            commandService.Send(new StartDepositTransactionCommand("00001", 1000));
+            syncHelper.WaitOne();
+            commandService.Send(new StartDepositTransactionCommand("00002", 1000));
+            syncHelper.WaitOne();
 
-            //账户1向账户2转账300元
-            commandService.Send(new TransferOut { SourceAccountId = bankAccountId1, TargetAccountId = bankAccountId2, Amount = 300 });
-            Thread.Sleep(1000);
+            Console.WriteLine(string.Empty);
 
-            //账户2向账户1转账500元
-            commandService.Send(new TransferOut { SourceAccountId = bankAccountId2, TargetAccountId = bankAccountId1, Amount = 500 });
-            Thread.Sleep(1000);
+            //账户1向账户3转账300元，交易会失败，因为账户3不存在
+            commandService.Send(new StartTransferTransactionCommand(new TransferTransactionInfo("00001", "00003", 300D)));
+            syncHelper.WaitOne();
+            Console.WriteLine(string.Empty);
 
-            var bankAccount1 = memoryCache.Get<BankAccount>(bankAccountId1.ToString());
-            var bankAccount2 = memoryCache.Get<BankAccount>(bankAccountId2.ToString());
+            //账户1向账户2转账1200元，交易会失败，因为余额不足
+            commandService.Send(new StartTransferTransactionCommand(new TransferTransactionInfo("00001", "00002", 1200D)));
+            syncHelper.WaitOne();
+            Console.WriteLine(string.Empty);
 
-            Console.WriteLine(string.Format("账户{0}余额:{1}", bankAccount1.AccountNumber, bankAccount1.Balance));
-            Console.WriteLine(string.Format("账户{0}余额:{1}", bankAccount2.AccountNumber, bankAccount2.Balance));
+            //账户2向账户1转账500元，交易成功
+            commandService.Send(new StartTransferTransactionCommand(new TransferTransactionInfo("00002", "00001", 500D)));
+            syncHelper.WaitOne();
+            Console.WriteLine(string.Empty);
 
             Console.WriteLine("Press Enter to exit...");
             Console.ReadLine();
+            _configuration.ShutdownEQueue();
         }
 
         static void InitializeENodeFramework()
         {
-            //全部使用默认配置，一般单元测试时，可以使用该配置
-            Configuration.StartWithAllDefault(new Assembly[] { Assembly.GetExecutingAssembly() });
+            var assemblies = new[] { Assembly.GetExecutingAssembly() };
+
+            _configuration = Configuration
+                .Create()
+                .UseAutofac()
+                .RegisterCommonComponents()
+                .UseLog4Net()
+                .UseJsonNet()
+                .CreateENode()
+                .RegisterENodeComponents()
+                .RegisterBusinessComponents(assemblies)
+                .UseEQueue()
+                .InitializeBusinessAssemblies(assemblies)
+                .StartENode(NodeType.CommandProcessor | NodeType.EventProcessor | NodeType.ExceptionProcessor)
+                .StartEQueue();
+
+            Console.WriteLine(string.Empty);
+            Console.WriteLine("ENode started...");
         }
     }
 }

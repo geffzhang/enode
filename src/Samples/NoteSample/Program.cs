@@ -1,38 +1,68 @@
 ﻿using System;
-using System.Threading;
+using System.Reflection;
+using ECommon.Autofac;
+using ECommon.Components;
+using ECommon.Configurations;
+using ECommon.JsonNet;
+using ECommon.Log4Net;
+using ECommon.Logging;
+using ECommon.Utilities;
 using ENode.Commanding;
-using ENode.Domain;
-using ENode.Infrastructure;
+using ENode.Configurations;
 using NoteSample.Commands;
+using NoteSample.EQueueIntegrations;
 
 namespace NoteSample
 {
     class Program
     {
+        static ILogger _logger;
+        static ENodeConfiguration _configuration;
+
         static void Main(string[] args)
         {
-            new ENodeFrameworkUnitTestInitializer().Initialize();
-
-            //如果要使用Sql或MongoDB来持久化，请用下面相应的语句来初始化
-            //new ENodeFrameworkSqlInitializer().Initialize();
-            //new ENodeFrameworkMongoInitializer().Initialize();
-
-            //如果要使用Redis来作为内存缓存，请用下面相应的语句来初始化
-            //new ENodeFrameworkRedisInitializer().Initialize();
+            InitializeENodeFramework();
 
             var commandService = ObjectContainer.Resolve<ICommandService>();
-            var memoryCache = ObjectContainer.Resolve<IMemoryCache>();
 
-            var noteId = Guid.NewGuid();
+            var noteId = ObjectId.GenerateNewStringId();
+            var command1 = new CreateNoteCommand { AggregateRootId = noteId, Title = "Sample Title1" };
+            var command2 = new ChangeNoteTitleCommand { AggregateRootId = noteId, Title = "Sample Title2" };
 
-            var command1 = new CreateNote { NoteId = noteId, Title = "Sample Note" };
-            var command2 = new ChangeNoteTitle { NoteId = noteId, Title = "Modified Note" };
+            Console.WriteLine(string.Empty);
 
-            commandService.Send(command1, (result) => commandService.Send(command2));
+            commandService.Execute(command1, CommandReturnType.EventHandled).Wait();
+            commandService.Execute(command2, CommandReturnType.EventHandled).Wait();
 
-            Thread.Sleep(1000);
-            Console.WriteLine("Press Enter to exit...");
+            Console.WriteLine(string.Empty);
+
+            _logger.Info("Press Enter to exit...");
+
             Console.ReadLine();
+            _configuration.ShutdownEQueue();
+        }
+
+        static void InitializeENodeFramework()
+        {
+            var assemblies = new[] { Assembly.GetExecutingAssembly() };
+            _configuration = Configuration
+                .Create()
+                .UseAutofac()
+                .RegisterCommonComponents()
+                .UseLog4Net()
+                .UseJsonNet()
+                .CreateENode()
+                .RegisterENodeComponents()
+                .RegisterBusinessComponents(assemblies)
+                .UseEQueue()
+                .InitializeBusinessAssemblies(assemblies)
+                .StartENode(NodeType.CommandProcessor | NodeType.EventProcessor)
+                .StartEQueue();
+
+            Console.WriteLine(string.Empty);
+
+            _logger = ObjectContainer.Resolve<ILoggerFactory>().Create(typeof(Program).Name);
+            _logger.Info("ENode started...");
         }
     }
 }

@@ -1,22 +1,28 @@
-﻿using System;
+﻿using ECommon.Components;
+using ECommon.Logging;
 using ENode.Eventing;
 using ENode.Infrastructure;
-using NoteSample.Events;
+using NoteSample.DomainEvents;
 
-namespace NoteSample.EventSubscribers
+namespace NoteSample.EventHandlers
 {
     [Component]
-    public class NoteEventHandler :
-        IEventHandler<NoteCreated>,
-        IEventHandler<NoteTitleChanged>
+    public class NoteEventHandler : IEventHandler<NoteCreated>, IEventHandler<NoteTitleChanged>
     {
-        public void Handle(NoteCreated evnt)
+        private ILogger _logger;
+
+        public NoteEventHandler(ILoggerFactory loggerFactory)
         {
-            Console.WriteLine(string.Format("Note created, title：{0}", evnt.Title));
+            _logger = loggerFactory.Create(typeof(NoteEventHandler).Name);
         }
-        public void Handle(NoteTitleChanged evnt)
+
+        public void Handle(IHandlingContext context, NoteCreated evnt)
         {
-            Console.WriteLine(string.Format("Note title changed, title：{0}", evnt.Title));
+            _logger.InfoFormat("Note Created, Id:{0}, Title：{1}, Version: {2}", evnt.AggregateRootId, evnt.Title, evnt.Version);
+        }
+        public void Handle(IHandlingContext context, NoteTitleChanged evnt)
+        {
+            _logger.InfoFormat("Note Updated, Id:{0}, Title：{1}, Version: {2}", evnt.AggregateRootId, evnt.Title, evnt.Version);
         }
     }
 }

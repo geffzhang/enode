@@ -6,8 +6,8 @@ namespace ENode.Messaging
     /// </summary>
     public interface IMessage
     {
-        /// <summary>Represents the unique identifier for the message.
+        /// <summary>Represents the identifier of the message.
         /// </summary>
-        Guid Id { get; }
+        string Id { get; }
     }
 }

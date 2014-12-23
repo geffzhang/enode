@@ -1,56 +1,134 @@
 ﻿using System;
-using BankTransferSample.Events;
+using System.Collections.Generic;
+using System.Linq;
+using BankTransferSample.DomainEvents;
+using BankTransferSample.Exceptions;
 using ENode.Domain;
-using ENode.Eventing;
 
 namespace BankTransferSample.Domain
 {
+    /// <summary>银行账户聚合根，封装银行账户余额变动的数据一致性
+    /// </summary>
     [Serializable]
-    public class BankAccount : AggregateRoot<Guid>,
-        IEventHandler<AccountOpened>,
-        IEventHandler<Deposited>,
-        IEventHandler<TransferedOut>,
-        IEventHandler<TransferedIn>
+    public class BankAccount : AggregateRoot<string>
     {
-        public string AccountNumber { get; private set; }
-        public string Owner { get; private set; }
-        public double Balance { get; private set; }
+        #region Private Variables
 
-        public BankAccount() : base() { }
-        public BankAccount(Guid accountId, string accountNumber, string owner) : base(accountId)
-        {
-            RaiseEvent(new AccountOpened(Id, accountNumber, owner));
-        }
+        private IDictionary<string, TransactionPreparation> _transactionPreparations;
+        private string _owner;
+        private double _balance;
 
-        public void Deposit(double amount)
+        #endregion
+
+        #region Constructors
+
+        /// <summary>构造函数
+        /// </summary>
+        public BankAccount(string accountId, string owner) : base(accountId)
         {
-            RaiseEvent(new Deposited(Id, amount, string.Format("向账户{0}存入金额{1}", AccountNumber, amount)));
-        }
-        public void TransferOut(BankAccount targetAccount, double amount)
-        {
-            RaiseEvent(new TransferedOut(Id, targetAccount.Id, amount, string.Format("{0}向账户{1}转出金额{2}", AccountNumber, targetAccount.AccountNumber, amount)));
-        }
-        public void TransferIn(BankAccount sourceAccount, double amount)
-        {
-            RaiseEvent(new TransferedIn(sourceAccount.Id, Id, amount, string.Format("{0}从账户{1}转入金额{2}", AccountNumber, sourceAccount.AccountNumber, amount)));
+            ApplyEvent(new AccountCreatedEvent(accountId, owner));
         }
 
-        void IEventHandler<AccountOpened>.Handle(AccountOpened evnt)
+        #endregion
+
+        #region Public Methods
+
+        /// <summary>添加一笔预操作
+        /// </summary>
+        public void AddTransactionPreparation(string transactionId, TransactionType transactionType, PreparationType preparationType, double amount)
         {
-            AccountNumber = evnt.AccountNumber;
-            Owner = evnt.Owner;
+            var availableBalance = GetAvailableBalance();
+            if (preparationType == PreparationType.DebitPreparation && availableBalance < amount)
+            {
+                throw new InsufficientBalanceException(Id, transactionId, transactionType, amount, _balance, availableBalance);
+            }
+
+            ApplyEvent(new TransactionPreparationAddedEvent(new TransactionPreparation(Id, transactionId, transactionType, preparationType, amount)));
         }
-        void IEventHandler<Deposited>.Handle(Deposited evnt)
+        /// <summary>提交一笔预操作
+        /// </summary>
+        public void CommitTransactionPreparation(string transactionId)
         {
-            Balance += evnt.Amount;
+            var transactionPreparation = GetTransactionPreparation(transactionId);
+            var currentBalance = _balance;
+            if (transactionPreparation.PreparationType == PreparationType.DebitPreparation)
+            {
+                currentBalance -= transactionPreparation.Amount;
+            }
+            else if (transactionPreparation.PreparationType == PreparationType.CreditPreparation)
+            {
+                currentBalance += transactionPreparation.Amount;
+            }
+            ApplyEvent(new TransactionPreparationCommittedEvent(currentBalance, transactionPreparation));
         }
-        void IEventHandler<TransferedOut>.Handle(TransferedOut evnt)
+        /// <summary>取消一笔预操作
+        /// </summary>
+        public void CancelTransactionPreparation(string transactionId)
         {
-            Balance -= evnt.Amount;
+            ApplyEvent(new TransactionPreparationCanceledEvent(GetTransactionPreparation(transactionId)));
         }
-        void IEventHandler<TransferedIn>.Handle(TransferedIn evnt)
+
+        #endregion
+
+        #region Private Methods
+
+        /// <summary>获取当前账户内的一笔预操作，如果预操作不存在，则抛出异常
+        /// </summary>
+        private TransactionPreparation GetTransactionPreparation(string transactionId)
         {
-            Balance += evnt.Amount;
+            if (_transactionPreparations == null || _transactionPreparations.Count == 0)
+            {
+                throw new TransactionPreparationNotExistException(Id, transactionId);
+            }
+            TransactionPreparation transactionPreparation;
+            if (!_transactionPreparations.TryGetValue(transactionId, out transactionPreparation))
+            {
+                throw new TransactionPreparationNotExistException(Id, transactionId);
+            }
+            return transactionPreparation;
         }
+        /// <summary>获取当前账户的可用余额，需要将已冻结的余额计算在内
+        /// </summary>
+        private double GetAvailableBalance()
+        {
+            if (_transactionPreparations == null || _transactionPreparations.Count == 0)
+            {
+                return _balance;
+            }
+
+            var totalDebitTransactionPreparationAmount = 0D;
+            foreach (var debitTransactionPreparation in _transactionPreparations.Values.Where(x => x.PreparationType == PreparationType.DebitPreparation))
+            {
+                totalDebitTransactionPreparationAmount += debitTransactionPreparation.Amount;
+            }
+
+            return _balance - totalDebitTransactionPreparationAmount;
+        }
+
+        #endregion
+
+        #region Handler Methods
+
+        private void Handle(AccountCreatedEvent evnt)
+        {
+            _id = evnt.AggregateRootId;
+            _owner = evnt.Owner;
+            _transactionPreparations = new Dictionary<string, TransactionPreparation>();
+        }
+        private void Handle(TransactionPreparationAddedEvent evnt)
+        {
+            _transactionPreparations.Add(evnt.TransactionPreparation.TransactionId, evnt.TransactionPreparation);
+        }
+        private void Handle(TransactionPreparationCommittedEvent evnt)
+        {
+            _transactionPreparations.Remove(evnt.TransactionPreparation.TransactionId);
+            _balance = evnt.CurrentBalance;
+        }
+        private void Handle(TransactionPreparationCanceledEvent evnt)
+        {
+            _transactionPreparations.Remove(evnt.TransactionPreparation.TransactionId);
+        }
+
+        #endregion
     }
 }

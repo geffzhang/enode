@@ -6,27 +6,22 @@ using System.Reflection;
 
 namespace ENode.Domain
 {
-    /// <summary>
-    /// 提供值对象基类，重写方法Equals，GetHashCode，以及重载==，!=这两个操作符
-    /// 确保两个对象比较的时候是比较值而不是比较引用地址，
-    /// 此基类支持值对象嵌套进行比较，用户在设计值对象时可以继承此类，从而减少很多值对象之间比较的工作
+    /// <summary>A DDD value object base class. Provide the mechanism to compare two objects by values.
     /// </summary>
     [Serializable]
     public abstract class ValueObject<T> where T : class
     {
-        /// <summary>
-        /// 返回当前值对象类型具有哪些原子属性
+        /// <summary>Returns all the atomic values of the current object.
         /// </summary>
         public abstract IEnumerable<object> GetAtomicValues();
-        /// <summary>
-        /// 返回当前值对象实例的深拷贝克隆实例
+        /// <summary>Clone a new object from the current object with the specified default values.
         /// </summary>
-        /// <param name="objectContainsNewValues">包含新属性值的匿名对象</param>
-        /// <returns>返回克隆后的新对象</returns>
+        /// <param name="objectContainsNewValues"></param>
+        /// <returns></returns>
         public T Clone(object objectContainsNewValues = null)
         {
-            var propertyInfos = this.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
-            PropertyInfo[] newPropertyInfoArray = objectContainsNewValues != null ? objectContainsNewValues.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly) : null;
+            var propertyInfos = GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+            var newPropertyInfoArray = objectContainsNewValues != null ? objectContainsNewValues.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly) : null;
             var cloneObject = typeof(T).GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null).Invoke(null) as T;
 
             if (newPropertyInfoArray != null)
@@ -34,14 +29,7 @@ namespace ENode.Domain
                 foreach (var propertyInfo in propertyInfos)
                 {
                     var property = newPropertyInfoArray.FirstOrDefault(x => x.Name == propertyInfo.Name);
-                    if (property != null)
-                    {
-                        propertyInfo.SetValue(cloneObject, property.GetValue(objectContainsNewValues, null), null);
-                    }
-                    else
-                    {
-                        propertyInfo.SetValue(cloneObject, propertyInfo.GetValue(this, null), null);
-                    }
+                    propertyInfo.SetValue(cloneObject, property != null ? property.GetValue(objectContainsNewValues, null) : propertyInfo.GetValue(this, null), null);
                 }
             }
             else
@@ -55,22 +43,19 @@ namespace ENode.Domain
             return cloneObject;
         }
 
-        /// <summary>
-        /// 等于号操作符重载，将左右两个对象比较的是值，而不是对象引用地址
+        /// <summary>Operator overrides.
         /// </summary>
         public static bool operator ==(ValueObject<T> left, ValueObject<T> right)
         {
             return IsEqual(left, right);
         }
-        /// <summary>
-        /// 不等于号操作符重载，将左右两个对象比较的是值，而不是对象引用地址
+        /// <summary>Operator overrides.
         /// </summary>
         public static bool operator !=(ValueObject<T> left, ValueObject<T> right)
         {
             return !IsEqual(left, right);
         }
-        /// <summary>
-        /// 重写Equals方法，可以支持递归的方式比较两个对象的值是否完全相等
+        /// <summary>Method overrides.
         /// </summary>
         public override bool Equals(object obj)
         {
@@ -79,11 +64,11 @@ namespace ENode.Domain
                 return false;
             }
 
-            ValueObject<T> other = (ValueObject<T>)obj;
-            IEnumerator<object> enumerator1 = this.GetAtomicValues().GetEnumerator();
-            IEnumerator<object> enumerator2 = other.GetAtomicValues().GetEnumerator();
-            bool enumerator1HasNextValue = enumerator1.MoveNext();
-            bool enumerator2HasNextValue = enumerator2.MoveNext();
+            var other = (ValueObject<T>)obj;
+            var enumerator1 = GetAtomicValues().GetEnumerator();
+            var enumerator2 = other.GetAtomicValues().GetEnumerator();
+            var enumerator1HasNextValue = enumerator1.MoveNext();
+            var enumerator2HasNextValue = enumerator2.MoveNext();
 
             while (enumerator1HasNextValue && enumerator2HasNextValue)
             {
@@ -111,8 +96,7 @@ namespace ENode.Domain
 
             return !enumerator1HasNextValue && !enumerator2HasNextValue;
         }
-        /// <summary>
-        /// 重写GetHashCode，返回根据值得到的HashCode
+        /// <summary>Method overrides.
         /// </summary>
         public override int GetHashCode()
         {
@@ -127,12 +111,15 @@ namespace ENode.Domain
             }
             return ReferenceEquals(left, null) || left.Equals(right);
         }
-        private static bool CompareEnumerables(IList enumerable1, IList enumerable2)
+        private static bool CompareEnumerables(IEnumerable enumerable1, IEnumerable enumerable2)
         {
-            IEnumerator enumerator1 = enumerable1.GetEnumerator();
-            IEnumerator enumerator2 = enumerable2.GetEnumerator();
-            bool enumerator1HasNextValue = enumerator1.MoveNext();
-            bool enumerator2HasNextValue = enumerator2.MoveNext();
+            if (enumerable1 == null) throw new ArgumentNullException("enumerable1");
+            if (enumerable2 == null) throw new ArgumentNullException("enumerable2");
+
+            var enumerator1 = enumerable1.GetEnumerator();
+            var enumerator2 = enumerable2.GetEnumerator();
+            var enumerator1HasNextValue = enumerator1.MoveNext();
+            var enumerator2HasNextValue = enumerator2.MoveNext();
 
             while (enumerator1HasNextValue && enumerator2HasNextValue)
             {
